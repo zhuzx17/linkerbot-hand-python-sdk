@@ -1159,7 +1159,7 @@ def _collect(
         _discard_responses(subscription, discard_s)
         overflows = subscription.get_health().overflows
         results = _send_requests(transport, requests, config)
-        claims = _claim_times(route_keys, requests, results)
+        claims = _claim_results(route_keys, requests, results)
         deadline = time.monotonic() + _budget.remaining(config.response_timeout_s)
         while True:
             remaining = max(0.0, deadline - time.monotonic())
@@ -1170,7 +1170,11 @@ def _collect(
             except RxTimeout:
                 break
             if _response_after_claim(
-                routed.route_key, routed.message, routed.received_at_s, claims
+                routed.route_key,
+                routed.message,
+                routed.received_at_s,
+                claims,
+                received_order=getattr(routed, "received_order", None),
             ):
                 messages.append(routed.message)
         if subscription.get_health().overflows != overflows:
@@ -1217,7 +1221,7 @@ def _execute_identity(
                     config,
                     minimum_interval_s=current.request_interval_s,
                 )
-                claims = _claim_times(route_keys, current.request_messages, results)
+                claims = _claim_results(route_keys, current.request_messages, results)
             except Exception as error:
                 raise _TransportProbeError(error) from error
             deadline = time.monotonic() + _budget.remaining(config.response_timeout_s)
@@ -1241,7 +1245,11 @@ def _execute_identity(
                         break
                     raise _NoResponse(matched=matched_any) from error
                 if not _response_after_claim(
-                    routed.route_key, routed.message, routed.received_at_s, claims
+                    routed.route_key,
+                    routed.message,
+                    routed.received_at_s,
+                    claims,
+                    received_order=getattr(routed, "received_order", None),
                 ):
                     continue
                 try:
@@ -1309,22 +1317,22 @@ def _send_requests(
     return tuple(results)
 
 
-def _claim_times(
+def _claim_results(
     route_keys: tuple[CANRouteKey, ...],
     requests: tuple[object, ...],
     results: tuple[SendResult, ...],
-) -> dict[tuple[CANRouteKey, int | None], float]:
+) -> dict[tuple[CANRouteKey, int | None], SendResult]:
     """Associate each sent request with its exact response route.
 
     A transaction may subscribe to more routes than its current stage uses
     (for example L30 identity keeps both DeviceInfo and product-code routes).
     Derive the stage route from the request and retain the individual claim
-    timestamp so a later request cannot authorize an earlier response.
+    boundary so a later request cannot authorize an earlier response.
     """
 
     if len(requests) != len(results):
         raise DiscoveryError("identity request and receipt counts differ")
-    claims: dict[tuple[CANRouteKey, int | None], float] = {}
+    claims: dict[tuple[CANRouteKey, int | None], SendResult] = {}
     for request, result in zip(requests, results, strict=True):
         if result.claimed_at_s is None:
             raise DiscoveryError("dispatched identity probe has no claim timestamp")
@@ -1334,7 +1342,7 @@ def _claim_times(
             if isinstance(request, can.Message) and request.data
             else None
         )
-        claims.setdefault((route, discriminator), result.claimed_at_s)
+        claims.setdefault((route, discriminator), result)
     return claims
 
 
@@ -1378,18 +1386,25 @@ def _response_after_claim(
     route: CANRouteKey,
     message: object,
     received_at_s: float,
-    claims: dict[tuple[CANRouteKey, int | None], float],
+    claims: dict[tuple[CANRouteKey, int | None], SendResult],
+    *,
+    received_order: int | None = None,
 ) -> bool:
     discriminator = (
         message.data[0] if isinstance(message, can.Message) and message.data else None
     )
-    claimed_at_s = claims.get((route, discriminator))
+    claim = claims.get((route, discriminator))
     # The broadcast C0 request is sent to 0xFF while a transport routes a
     # device's reply on its real 0x27/0x28 address. Permit that explicit
     # discovery claim for either default reply route only.
-    if claimed_at_s is None and route in CLASSIC_DEFAULT_ROUTES:
-        claimed_at_s = claims.get((CLASSIC_BROADCAST_ROUTE, discriminator))
-    return claimed_at_s is not None and received_at_s >= claimed_at_s
+    if claim is None and route in CLASSIC_DEFAULT_ROUTES:
+        claim = claims.get((CLASSIC_BROADCAST_ROUTE, discriminator))
+    if claim is None:
+        return False
+    claimed_order = getattr(claim, "claimed_order", None)
+    if received_order is not None and claimed_order is not None:
+        return received_order > claimed_order
+    return claim.claimed_at_s is not None and received_at_s >= claim.claimed_at_s
 
 
 def _open_transport(transport: object) -> None:

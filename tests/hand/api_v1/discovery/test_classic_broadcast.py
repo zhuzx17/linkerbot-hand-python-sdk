@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -32,6 +31,14 @@ _Replies = tuple[can.Message, ...]
 _Filter = Callable[[can.Message, _Replies], _Replies]
 
 
+@pytest.fixture(params=(False, True), ids=("system-clock", "equal-timestamps"))
+def claim_clock(request, monkeypatch):
+    if request.param:
+        clock = lambda: 10.0
+        monkeypatch.setitem(SendReceipt.__init__.__kwdefaults__, "monotonic", clock)
+        monkeypatch.setitem(FakeTransport.__init__.__kwdefaults__, "monotonic", clock)
+
+
 class _BroadcastTransport(FakeTransport[can.Message]):
     def __init__(
         self,
@@ -54,6 +61,20 @@ class _BroadcastTransport(FakeTransport[can.Message]):
             self.script.arbitration_id if response_id is None else response_id
         )
         self.transform = transform
+        self.received = []
+        self.reply_receipts = {}
+
+    def subscribe_routes(self, routes, **kwargs):
+        subscription = super().subscribe_routes(routes, **kwargs)
+        receive = subscription.receive
+
+        def record(**receive_kwargs):
+            routed = receive(**receive_kwargs)
+            self.received.append(routed)
+            return routed
+
+        subscription.receive = record
+        return subscription
 
     def send(self, message: can.Message) -> SendReceipt:
         receipt = super().send(message)
@@ -90,7 +111,7 @@ class _ClaimBoundaryTransport(_BroadcastTransport):
     def __init__(self, model, *, stale_stage=None):
         super().__init__(model)
         self.stale_stage = stale_stage
-        self.reply_times: list[tuple[int, int, float, SendReceipt]] = []
+        self.reply_states: dict[int, tuple[int, int, bool, bool]] = {}
 
     def send(self, message: can.Message) -> SendReceipt:
         receipt = SendReceipt(generation=self.get_health().generation)
@@ -122,8 +143,12 @@ class _ClaimBoundaryTransport(_BroadcastTransport):
             receipt._claim()
         for reply in replies:
             self.emit(reply)
-            self.reply_times.append(
-                (message.arbitration_id, reply.data[0], time.monotonic(), receipt)
+            self.reply_receipts[id(reply)] = receipt
+            self.reply_states[id(reply)] = (
+                message.arbitration_id,
+                reply.data[0],
+                receipt.claimed_at_s is not None,
+                receipt.done(),
             )
         if stale:
             receipt._claim()
@@ -137,8 +162,7 @@ class _SynchronousReplyTransport(_BroadcastTransport):
 
     def __init__(self, model):
         super().__init__(model)
-        self.reply_times: list[tuple[float, SendReceipt]] = []
-        self._last_reply_at_s: float | None = None
+        self.emitted = []
 
     def open(self):
         super().open()
@@ -148,14 +172,16 @@ class _SynchronousReplyTransport(_BroadcastTransport):
             dispatch(message)
             for reply in self._responses(message):
                 self.emit(reply)
-                self._last_reply_at_s = time.monotonic()
+                self.emitted.append(reply)
 
         self.current_dispatcher.send_now = send_with_reply
 
     def send(self, message):
+        start = len(self.emitted)
         receipt = FakeTransport.send(self, message)
-        assert self._last_reply_at_s is not None
-        self.reply_times.append((self._last_reply_at_s, receipt))
+        assert len(self.emitted) > start
+        for reply in self.emitted[start:]:
+            self.reply_receipts[id(reply)] = receipt
         return receipt
 
 
@@ -387,7 +413,9 @@ def test_queued_old_identity_is_discarded_before_verification():
 
 @pytest.mark.parametrize("model", _PRODUCTS)
 @pytest.mark.parametrize("stale_stage", ("product", "identity", "later_query"))
-def test_replies_before_their_query_claim_cannot_verify_identity(model, stale_stage):
+def test_replies_before_their_query_claim_cannot_verify_identity(
+    model, stale_stage, claim_clock
+):
     transport = _ClaimBoundaryTransport(model, stale_stage=stale_stage)
     report = _scan(transport)
 
@@ -400,46 +428,45 @@ def test_replies_before_their_query_claim_cannot_verify_identity(model, stale_st
         candidate = report.require_one(allow_partial=True)
         assert candidate.problems[0].code == "identity_timeout"
     old_replies = [
-        (received_at, receipt)
-        for request_id, opcode, received_at, receipt in transport.reply_times
+        routed
+        for routed in transport.received
+        for request_id, opcode, _, _ in (transport.reply_states[id(routed.message)],)
         if stale_stage == "product"
         or (request_id != 0xFF and (stale_stage == "identity" or opcode != 0xC0))
     ]
     assert old_replies
-    assert all(
-        receipt.claimed_at_s is not None and received_at < receipt.claimed_at_s
-        for received_at, receipt in old_replies
-    )
+    for routed in old_replies:
+        receipt = transport.reply_receipts[id(routed.message)]
+        assert routed.received_order < receipt.claimed_order
+        assert transport.reply_states[id(routed.message)][2:] == (False, False)
 
 
 @pytest.mark.parametrize("model", _PRODUCTS)
-def test_fast_replies_after_claim_and_before_batch_completion_are_preserved(model):
+def test_fast_replies_after_claim_and_before_batch_completion_are_preserved(
+    model, claim_clock
+):
     transport = _ClaimBoundaryTransport(model)
     assert _scan(transport).require_one().model == model
 
-    assert transport.reply_times
-    for _, _, received_at, receipt in transport.reply_times:
+    assert transport.received
+    for routed in transport.received:
+        receipt = transport.reply_receipts[id(routed.message)]
         result = receipt.result()
-        assert result.claimed_at_s is not None
-        assert result.claimed_at_s <= received_at < result.completed_at_s
-    verification_replies = [
-        received_at
-        for request_id, _, received_at, _ in transport.reply_times
-        if request_id != 0xFF
-    ]
-    assert (
-        verification_replies[0] < transport.reply_times[-1][3].result().completed_at_s
-    )
+        assert result.claimed_order < routed.received_order
+        assert transport.reply_states[id(routed.message)][2:] == (True, False)
 
 
 @pytest.mark.parametrize("model", _PRODUCTS)
-def test_synchronous_dispatcher_replies_before_send_returns_are_preserved(model):
+def test_synchronous_dispatcher_replies_before_send_returns_are_preserved(
+    model, claim_clock
+):
     transport = _SynchronousReplyTransport(model)
     assert _scan(transport).require_one().model == model
-    for received_at, receipt in transport.reply_times:
+    assert transport.received
+    for routed in transport.received:
+        receipt = transport.reply_receipts[id(routed.message)]
         result = receipt.result()
-        assert result.claimed_at_s is not None
-        assert result.claimed_at_s <= received_at < result.completed_at_s
+        assert result.claimed_order < routed.received_order
 
 
 def test_broadcast_candidate_can_reopen_with_the_same_default_receive_routes():

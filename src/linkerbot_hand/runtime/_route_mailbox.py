@@ -19,6 +19,7 @@ class InboundMessage:
 
     message: object
     received_at_s: float
+    received_order: int | None = None
 
 
 class _RoutedMessage(Protocol):
@@ -125,7 +126,11 @@ class RouteMailbox:
             return None
         if routed is None:
             return None
-        return InboundMessage(routed.message, routed.received_at_s)
+        return InboundMessage(
+            routed.message,
+            routed.received_at_s,
+            getattr(routed, "received_order", None),
+        )
 
     def error(self) -> BaseException | None:
         """Return the receiver's terminal error, if one occurred."""
