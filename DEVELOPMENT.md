@@ -35,12 +35,23 @@ or device credentials and do not publish releases.
 Tests use simulated transports and protocol data. Physical CAN/CAN FD adapters,
 device firmware, and movement require separate hardware validation.
 
+Discovery and transaction response attribution use Transport's optional
+`claimed_order`/`received_order` metadata when available. This preserves send
+and receive ordering on low-resolution Windows clocks without discarding valid
+replies during a batch. Older transports retain the timestamp fallback; equal
+timestamps remain ambiguous on that compatibility path. Regression tests cover
+identical timestamps and repeated complete angle queries between tactile fingers.
+
 ## 中文说明
 
 先按 README 安装当前 Transport 源码，再使用固定的 CI 工具版本运行上述检查。
 普通 CI 覆盖 Linux/Windows 和 Python 3.10、3.13；每周补测 3.11、3.12 及
 Humble/Jazzy 下的最新 ROS 消费者。查看 Actions artifacts 中的测试、覆盖率与打包结果。
 离线测试通过不能代替实机通信、固件与动作验证。
+
+设备发现和事务回复优先使用 Transport 的可选事件序号判断 claim 前后关系，避免
+Windows 低精度时钟误采信旧回复；旧传输仍保留时间戳兼容路径，相同时间戳仍有歧义。
+触觉回归检查指间完整、有界的角度查询组，不假设 100 Hz 轮询只能发生一次。
 
 ## 在个人 fork 验证 CI
 
