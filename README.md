@@ -120,6 +120,8 @@ finally:
 
 ## Contributing and license
 
+See [Development and CI](DEVELOPMENT.md) for local checks and the test matrix.
+
 English and Chinese contributions are welcome. Follow the
 [Linkerbot contribution guide](https://github.com/linker-bot/.github/blob/main/CONTRIBUTING.md).
 Report vulnerabilities privately using the
