@@ -9,6 +9,7 @@ import can
 import pytest
 
 from linkerbot_hand import (
+    DiscoveryConfig,
     DiscoveryStatus,
     HandSide,
     IncompleteIdentityError,
@@ -29,6 +30,11 @@ _PRODUCTS = {
 }
 _Replies = tuple[can.Message, ...]
 _Filter = Callable[[can.Message, _Replies], _Replies]
+
+# Claim ordering is the contract here, independent of a 3 ms test-only deadline.
+_CLAIM_BOUNDARY_CONFIG = replace(
+    _FAST, response_timeout_s=DiscoveryConfig().response_timeout_s
+)
 
 
 @pytest.fixture(params=(False, True), ids=("system-clock", "equal-timestamps"))
@@ -417,7 +423,7 @@ def test_replies_before_their_query_claim_cannot_verify_identity(
     model, stale_stage, claim_clock
 ):
     transport = _ClaimBoundaryTransport(model, stale_stage=stale_stage)
-    report = _scan(transport)
+    report = _scan(transport, _CLAIM_BOUNDARY_CONFIG)
 
     assert report.failures == ()
     assert report.verified_candidates == ()
@@ -446,7 +452,7 @@ def test_fast_replies_after_claim_and_before_batch_completion_are_preserved(
     model, claim_clock
 ):
     transport = _ClaimBoundaryTransport(model)
-    assert _scan(transport).require_one().model == model
+    assert _scan(transport, _CLAIM_BOUNDARY_CONFIG).require_one().model == model
 
     assert transport.received
     for routed in transport.received:
@@ -461,7 +467,7 @@ def test_synchronous_dispatcher_replies_before_send_returns_are_preserved(
     model, claim_clock
 ):
     transport = _SynchronousReplyTransport(model)
-    assert _scan(transport).require_one().model == model
+    assert _scan(transport, _CLAIM_BOUNDARY_CONFIG).require_one().model == model
     assert transport.received
     for routed in transport.received:
         receipt = transport.reply_receipts[id(routed.message)]
