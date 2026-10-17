@@ -23,6 +23,7 @@ from linkerbot_hand.runtime._transaction_runner import (
     TransactionRunner,
 )
 from linkerbot_transport import SendReceipt
+from linkerbot_transport.testing import FakeTransport
 
 
 class RunnerRig:
@@ -308,6 +309,53 @@ def test_presend_fragment_cannot_complete_a_new_multipart_response():
     with pytest.raises(ResponseTimeoutError):
         rig.complete(transaction)
     assert parts == {"second"}
+
+
+@pytest.mark.parametrize("buffered", (False, True))
+@pytest.mark.parametrize("fresh_reply", (False, True))
+def test_equal_timestamp_stale_reply_cannot_acknowledge_a_new_write(
+    buffered, fresh_reply
+):
+    rig = RunnerRig()
+    transaction, reply = l6_limit_write(rig)
+    transport = FakeTransport(route_key_of=lambda _: "reply", monotonic=lambda: 1.0)
+    transport.open()
+    route = transport.subscribe_route("reply")
+    receipt = SendReceipt(monotonic=lambda: 1.0)
+    try:
+        transport.emit(reply)
+        stale = route.receive(timeout_s=0)
+        receipt._claim()
+        rig.incoming.append(
+            InboundMessage(reply, stale.received_at_s, stale.received_order)
+        )
+        if fresh_reply:
+            transport.emit(reply)
+            fresh = route.receive(timeout_s=0)
+            assert stale.received_at_s == fresh.received_at_s == receipt.claimed_at_s
+            assert stale.received_order < receipt.claimed_order < fresh.received_order
+            rig.incoming.append(
+                InboundMessage(reply, fresh.received_at_s, fresh.received_order)
+            )
+        if buffered:
+
+            def dispatch():
+                rig.wait_hook = None
+                receipt._dispatch()
+
+            rig.wait_hook = dispatch
+        else:
+            receipt._dispatch()
+        if fresh_reply:
+            outcome = rig.complete(transaction, receipt=receipt)
+            assert outcome.acknowledged
+            assert len(rig.published) == 1
+        else:
+            with pytest.raises(ResponseTimeoutError):
+                rig.complete(transaction, receipt=receipt)
+            assert rig.published == []
+    finally:
+        transport.close()
 
 
 @pytest.mark.parametrize("received_at", (1.0, 1.01))

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from linkerbot_hand import HandSide, TransportKind, discover_hands
 from linkerbot_transport import SendReceipt, TransportState
 from linkerbot_transport.testing import FakeTransport
@@ -60,7 +62,14 @@ class _PreclaimO20Transport(FakeTransport):
         return receipt
 
 
-def test_fd_preclaim_identity_is_ignored_and_actual_model_is_probed() -> None:
+@pytest.mark.parametrize("equal_timestamps", (False, True))
+def test_fd_preclaim_identity_is_ignored_and_actual_model_is_probed(
+    equal_timestamps, monkeypatch
+) -> None:
+    if equal_timestamps:
+        clock = lambda: 10.0
+        monkeypatch.setitem(SendReceipt.__init__.__kwdefaults__, "monotonic", clock)
+        monkeypatch.setitem(FakeTransport.__init__.__kwdefaults__, "monotonic", clock)
     transport = _PreclaimO20Transport()
     source = _Source(
         replace(_fd_channel(), probe_protocols=(TransportKind.CAN_FD,)),

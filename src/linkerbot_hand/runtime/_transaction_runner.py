@@ -430,6 +430,7 @@ class TransactionRunner:
                     capabilities=pending.capabilities,
                     generation=pending.publish_generation,
                     not_before_s=result.claimed_at_s,
+                    not_before_order=getattr(result, "claimed_order", None),
                     deadline_s=response_deadline,
                     response_timeout_s=response_timeout_s,
                     first_inbound=buffered.deferred_inbound,
@@ -543,10 +544,8 @@ class TransactionRunner:
         # earlier frame eligible. Completion is too late as a lower bound, since
         # valid replies may arrive while the rest of a batch is still sending.
         claimed_at_s = pending.receipt.claimed_at_s
-        if (
-            waiting_for_response
-            and claimed_at_s is not None
-            and inbound.received_at_s >= claimed_at_s
+        if waiting_for_response and _received_after_claim(
+            inbound, claimed_at_s, getattr(pending.receipt, "claimed_order", None)
         ):
             try:
                 progress = transaction.consume(inbound.message)
@@ -578,6 +577,7 @@ class TransactionRunner:
         not_before_s: float,
         deadline_s: float,
         response_timeout_s: float,
+        not_before_order: int | None = None,
         first_inbound: InboundMessage | None = None,
     ) -> tuple[ResponseProgress, tuple[tuple[SamplePayload, object], ...]]:
         """Accept only frames received before the response deadline.
@@ -613,7 +613,9 @@ class TransactionRunner:
                     self._metrics.received(timestamp=inbound.received_at_s)
                     if self._consume_quarantined(inbound.message):
                         continue
-                    if inbound.received_at_s < not_before_s:
+                    if not _received_after_claim(
+                        inbound, not_before_s, not_before_order
+                    ):
                         self._publish_report(
                             inbound, capabilities=capabilities, generation=generation
                         )
@@ -835,6 +837,16 @@ class TransactionRunner:
         receiver_error = self._receiver_error()
         if receiver_error is not None:
             raise receiver_error
+
+
+def _received_after_claim(
+    inbound: InboundMessage,
+    claimed_at_s: float | None,
+    claimed_order: int | None,
+) -> bool:
+    if inbound.received_order is not None and claimed_order is not None:
+        return inbound.received_order > claimed_order
+    return claimed_at_s is not None and inbound.received_at_s >= claimed_at_s
 
 
 def _stage_wait_budget(
