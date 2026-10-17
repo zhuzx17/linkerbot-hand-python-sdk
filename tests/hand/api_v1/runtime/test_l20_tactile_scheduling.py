@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import can
 import pytest
 
@@ -32,14 +34,21 @@ def device(request):
         hand.close()
 
 
-def test_tactile_yields_to_complete_angle_write_and_query(device, monkeypatch):
+@pytest.mark.parametrize("query_delay_s", (0.0, 0.02))
+def test_tactile_yields_to_complete_angle_write_and_query(
+    device, monkeypatch, query_delay_s
+):
     hand, transport = device
     original_send = transport.send
     handle = None
     snapshots = []
+    angle_opcodes = (
+        tuple(range(0x41, 0x46)) if transport.script.model == "L20" else (0x01, 0x04)
+    )
+    delayed = False
 
     def send(message):
-        nonlocal handle
+        nonlocal handle, delayed
         if bytes(message.data) == b"\xb1\xc6":
             hand.start_polling(
                 PollingPlan(
@@ -48,6 +57,15 @@ def test_tactile_yields_to_complete_angle_write_and_query(device, monkeypatch):
                 )
             )
             handle = hand.set_angles((42,) * len(hand.get_capabilities().joints))
+        if (
+            query_delay_s
+            and not delayed
+            and bytes(message.data) == bytes((angle_opcodes[-1],))
+        ):
+            # A slow query makes another 100 Hz poll due at the same safe
+            # boundary, as can happen on a loaded Windows runner.
+            delayed = True
+            time.sleep(query_delay_s)
         if bytes(message.data) in tuple(bytes((i, 0xC6)) for i in range(0xB1, 0xB6)):
             snapshots.append(hand.get_snapshot().force)
         return original_send(message)
@@ -60,12 +78,19 @@ def test_tactile_yields_to_complete_angle_write_and_query(device, monkeypatch):
     first_finger = payloads.index(b"\xb1\xc6")
     second_finger = payloads.index(b"\xb2\xc6", first_finger + 1)
     interstage = payloads[first_finger + 1 : second_finger]
-    angle_opcodes = (
-        tuple(range(0x41, 0x46)) if transport.script.model == "L20" else (0x01, 0x04)
-    )
     # All fragments must fit within one boundary, never split across fingers.
     assert tuple(p[0] for p in interstage if len(p) > 1) == angle_opcodes
-    assert tuple(p[0] for p in interstage if len(p) == 1) == angle_opcodes
+    queries = tuple(p[0] for p in interstage if len(p) == 1)
+    assert queries
+    assert len(queries) % len(angle_opcodes) == 0
+    query_count = len(queries) // len(angle_opcodes)
+    # The boundary permits up to four transactions: this one command and
+    # complete query groups. Repeated polling must still let tactile advance.
+    assert 1 <= query_count <= 3
+    assert queries == angle_opcodes * query_count
+    if query_delay_s:
+        assert delayed
+        assert query_count >= 2
     assert len(snapshots) == 5
     assert all(sample is not None and not sample.meta.valid for sample in snapshots)
     assert len(force.tactile) == 5

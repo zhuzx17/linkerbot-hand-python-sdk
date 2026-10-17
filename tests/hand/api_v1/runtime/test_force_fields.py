@@ -131,7 +131,9 @@ def test_o30_concurrent_selectors_never_corrupt_sensor_selection():
     script = O30DeviceScript(sensor_variant="TSSP_JZG")
     hand = HandDevice(model="O30", side="right", transport=ScriptedO30Transport(script))
     with closing(hand.open()):
-        hand.get_force()
+        initial = hand.get_force()
+        # Immediate replies can finish before another caller joins. Overlapping
+        # request coalescing is checked deterministically in test_transactions.
         barrier = Barrier(8)
 
         def read(index):
@@ -141,6 +143,13 @@ def test_o30_concurrent_selectors_never_corrupt_sensor_selection():
         with ThreadPoolExecutor(max_workers=8) as pool:
             samples = list(pool.map(read, range(8)))
         for sample in samples:
+            assert sample.fn.raw == tuple(
+                tuple(range(finger * 10, finger * 10 + 70)) for finger in range(1, 6)
+            )
             assert sample.fns.raw == tuple((1000 + index,) for index in range(1, 6))
-            assert sample.fn.meta == sample.fns.meta
-        assert len({sample.meta.sequence for sample in samples}) < 8
+            assert sample.fn.meta is sample.fns.meta is sample.meta
+            assert sample.meta.valid
+            assert sample.meta.sequence > initial.meta.sequence
+            assert (
+                sample.meta.connection_generation == initial.meta.connection_generation
+            )

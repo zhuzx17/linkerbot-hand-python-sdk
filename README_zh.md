@@ -113,6 +113,8 @@ finally:
 
 ## 贡献与许可证
 
+本地检查与 CI 测试范围见[开发说明](DEVELOPMENT.md)。
+
 欢迎用中文或英文参与贡献，请遵循[Linkerbot 贡献指南](https://github.com/linker-bot/.github/blob/main/CONTRIBUTING.md)。
 安全问题请按[组织安全策略](https://github.com/linker-bot/.github/blob/main/SECURITY.md)私下报告。
 
