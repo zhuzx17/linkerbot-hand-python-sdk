@@ -50,6 +50,10 @@ timestamps remain ambiguous on that compatibility path. Regression tests cover
 identical timestamps and repeated complete angle queries between tactile fingers.
 Asynchronous tests observe acknowledgement and publication events directly;
 coarse elapsed timestamps and rapidly replaced snapshots are not event histories.
+Discovery identity tests use synchronous peers and a scan-local logical clock:
+queued frames do not consume simulated time, while empty receives and protocol
+delays advance the scan budget. Transport metadata and runtime threads retain
+their real clocks; the total-budget regression also runs with real waiting.
 
 ## 中文说明
 
@@ -65,6 +69,8 @@ PR 与 `main` 更新同时运行 Transport 中已有的双手双臂联合测试�
 Windows 低精度时钟误采信旧回复；旧传输仍保留时间戳兼容路径，相同时间戳仍有歧义。
 触觉回归检查指间完整、有界的角度查询组，不假设 100 Hz 轮询只能发生一次。
 异步回归直接观察 ACK 和发布事件，避免使用粗粒度耗时或瞬时快照推断事件历史。
+发现语义测试使用同步设备与扫描局部逻辑时钟：排队帧不消耗模拟时间，空队列等待与
+协议间隔推进扫描预算；传输元数据和运行时线程仍使用真实时钟，总预算另保留真实等待回归。
 
 ## 在个人 fork 验证 CI
 
