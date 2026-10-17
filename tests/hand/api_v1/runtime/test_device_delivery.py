@@ -1215,12 +1215,27 @@ def test_interstage_disconnect_does_not_reach_the_ended_generation() -> None:
         hand.close()
 
 
-def test_unsolicited_report_is_not_starved_by_sustained_commands() -> None:
+def test_unsolicited_report_is_not_starved_by_sustained_commands(monkeypatch) -> None:
     hand, _state, transport = make_hand()
     hand.open()
     keep_refilling = threading.Event()
     keep_refilling.set()
     submitted = 0
+    report_published = threading.Event()
+    store = opened_runtime(hand)._snapshot_store
+    publish = store.publish
+
+    def observe_publish(payload, **kwargs):
+        sample = publish(payload, **kwargs)
+        if (
+            payload.semantic is TelemetrySemantic.ANGLES
+            and sample.raw == (77,) * 6
+            and sample.meta.origin is DataOrigin.DEVICE_RESPONSE
+        ):
+            report_published.set()
+        return sample
+
+    monkeypatch.setattr(store, "publish", observe_publish)
 
     def refill() -> None:
         nonlocal submitted
@@ -1244,11 +1259,9 @@ def test_unsolicited_report_is_not_starved_by_sustained_commands() -> None:
             )
         )
 
-        def report_was_published() -> bool:
-            angles = hand.get_snapshot().angles
-            return angles is not None and angles.raw == (77,) * 6
-
-        wait_until(report_was_published, timeout_s=0.5)
+        # The next command may immediately replace the cached angles. Record
+        # publication durably so a slow observer cannot miss a processed report.
+        assert report_published.wait(timeout=0.5)
         assert submitted > 0
     finally:
         keep_refilling.clear()
