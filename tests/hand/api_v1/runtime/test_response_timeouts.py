@@ -245,7 +245,7 @@ def test_ordinary_override_applies_to_baseline_getters_and_polling(
 
 @pytest.mark.parametrize("model", ("L6", "O6", "O30"))
 def test_ordinary_override_applies_to_configuration_acknowledgement(
-    devices: Callable, model: str
+    devices: Callable, model: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hand, replies = devices(model, config=DeviceConfig(transaction_timeout_s=0.4))
     hand.open()
@@ -255,12 +255,31 @@ def test_ordinary_override_applies_to_configuration_acknowledgement(
         else (lambda message: message.data[0] == 2)
     )
 
-    started = time.monotonic()
-    handle = hand.set_current_limits((20,) * len(hand.get_capabilities().joints))
+    ack_arrived, release_ack = threading.Event(), threading.Event()
+    dispatcher = replies.transport.current_dispatcher
+    emit = dispatcher.emit
 
-    assert handle.wait(timeout=1) is CommandStage.ACKNOWLEDGED
-    assert time.monotonic() - started >= replies.delay_s
-    assert handle.error is None
+    def hold_ack(message):
+        if replies.matches(message):
+            ack_arrived.set()
+            if not release_ack.wait(timeout=1):
+                raise RuntimeError("test did not release the delayed acknowledgement")
+        emit(message)
+
+    monkeypatch.setattr(dispatcher, "emit", hold_ack)
+    try:
+        handle = hand.set_current_limits((20,) * len(hand.get_capabilities().joints))
+
+        assert ack_arrived.wait(timeout=1)
+        # Observe the actual ACK boundary rather than subtracting coarse Windows
+        # clock readings. The delayed response must not complete the command early.
+        assert handle.stage is CommandStage.DISPATCHED
+        assert not handle.done
+        release_ack.set()
+        assert handle.wait(timeout=1) is CommandStage.ACKNOWLEDGED
+        assert handle.error is None
+    finally:
+        release_ack.set()
 
 
 @pytest.mark.parametrize("model", ("O20", "L30"))

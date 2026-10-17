@@ -1,4 +1,4 @@
-# Local gates mirroring .gitea/workflows/ci.yml.
+# Local gates mirroring .github/workflows/ci.yml.
 #
 # Install once per clone:
 #     pre-commit install

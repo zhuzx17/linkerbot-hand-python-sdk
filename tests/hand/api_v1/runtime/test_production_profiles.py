@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import threading
 import time
 
 import can
@@ -45,6 +47,7 @@ def _make_hand(
     side: HandSide,
     *,
     config: DeviceConfig | None = None,
+    clock: object | None = None,
 ) -> tuple[HandDevice, ScriptedClassicCANTransport]:
     script = make_script(model, side)
     transport = ScriptedClassicCANTransport(script)
@@ -53,6 +56,7 @@ def _make_hand(
         side=side.value,
         transport=transport,
         config=config,
+        clock=clock,
     )
     return hand, transport
 
@@ -709,13 +713,30 @@ def test_o6_complete_tactile_transaction_counts_as_one_read() -> None:
         hand.close()
 
 
+class _CoarseWaitClock:
+    """Keep real timestamps while emulating interruptible Windows timer waits."""
+
+    monotonic = staticmethod(time.monotonic)
+    time = staticmethod(time.time)
+
+    @staticmethod
+    def wait(event: threading.Event, timeout: float | None) -> bool:
+        if timeout is not None and timeout > 0:
+            tick_s = 1 / 64
+            timeout = math.ceil(timeout / tick_s) * tick_s
+        return event.wait(timeout)
+
+
 @pytest.mark.parametrize(
-    ("model", "side", "force_hz", "rows", "columns", "selector"),
+    ("model", "side", "force_hz", "rows", "columns", "selector", "coarse_wait"),
     (
-        ("L6", HandSide.LEFT, 5, 12, 6, 0xC6),
-        ("O6", HandSide.RIGHT, 20, 10, 4, 0xA4),
-        ("L20Lite", HandSide.LEFT, 10, 12, 6, 0xC6),
-        ("L20", HandSide.RIGHT, 10, 12, 6, 0xC6),
+        ("L6", HandSide.LEFT, 5, 12, 6, 0xC6, False),
+        ("O6", HandSide.RIGHT, 20, 10, 4, 0xA4, False),
+        ("L20Lite", HandSide.LEFT, 10, 12, 6, 0xC6, False),
+        ("L20", HandSide.RIGHT, 10, 12, 6, 0xC6, False),
+        pytest.param(
+            "L20", HandSide.RIGHT, 10, 12, 6, 0xC6, True, id="L20-coarse-waits"
+        ),
     ),
 )
 def test_angle_and_full_tactile_polling_publish_complete_samples(
@@ -725,8 +746,11 @@ def test_angle_and_full_tactile_polling_publish_complete_samples(
     rows: int,
     columns: int,
     selector: int,
+    coarse_wait: bool,
 ) -> None:
-    hand, transport = _make_hand(model, side)
+    hand, transport = _make_hand(
+        model, side, clock=_CoarseWaitClock() if coarse_wait else None
+    )
     hand.open()
     try:
         initial_angles = hand.get_snapshot().angles
@@ -738,14 +762,32 @@ def test_angle_and_full_tactile_polling_publish_complete_samples(
             snapshot = hand.get_snapshot()
             angles = snapshot.angles
             force = snapshot.force
+            completed = {
+                channel.channel
+                for channel in hand.get_health().channels
+                if channel.completed_reads > 0
+            }
             return (
                 angles is not None
                 and angles.meta.sequence > initial_angle_sequence
                 and force is not None
                 and force.meta.valid
+                and {"angles", "force"} <= completed
             )
 
-        wait_until(polling_ready, timeout_s=1)
+        # Windows can round each 0.5 ms interval in L20's five-frame angle
+        # batches to 15.625 ms. Due angle reads at four finger boundaries can
+        # then delay a complete force sample past 1 s without a response timeout.
+        # Requested polling rates are not guaranteed completion deadlines.
+        wait_until(polling_ready, timeout_s=3)
+        polling_health = {
+            channel.channel: channel
+            for channel in hand.get_health().channels
+            if channel.channel in {"angles", "force"}
+        }
+        assert polling_health.keys() == {"angles", "force"}
+        assert all(channel.completed_reads > 0 for channel in polling_health.values())
+        assert all(channel.timeouts == 0 for channel in polling_health.values())
         hand.stop_polling()
 
         snapshot = hand.get_snapshot()
@@ -756,6 +798,15 @@ def test_angle_and_full_tactile_polling_publish_complete_samples(
             for matrix in snapshot.force.tactile
         )
         assert snapshot.force.tactile[0].raw[0] == tuple(range(columns))
+        assert tuple(matrix.raw for matrix in snapshot.force.tactile) == tuple(
+            tuple(
+                tuple(
+                    (finger * rows + row + column) & 0xFF for column in range(columns)
+                )
+                for row in range(rows)
+            )
+            for finger in range(5)
+        )
         assert transport.script.read_counts[selector] >= 5
         angle_opcode = 0x41 if model == "L20" else 0x01
         assert transport.script.read_counts[angle_opcode] >= 2

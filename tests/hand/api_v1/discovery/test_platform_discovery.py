@@ -118,7 +118,8 @@ def test_all_fd_models_discover_and_reconstruct_through_usb_sources(
         hand.close()
 
 
-def test_total_budget_stops_more_sends_and_closes_transport():
+@pytest.mark.parametrize("discovery_clock", ("logical", "real"), indirect=True)
+def test_total_budget_stops_more_sends_and_closes_transport(discovery_clock):
     transport = _empty_transport()
     channel = DiscoveryChannel("fake", "test", TransportKind.CAN)
     source = _Source(channel, {TransportKind.CAN: lambda: transport})
