@@ -9,13 +9,15 @@ git -C linkerbot-transport remote set-url origin https://github.com/linker-bot/l
 git -C linkerbot-hand-python-sdk remote set-url origin https://github.com/linker-bot/linkerbot-hand-python-sdk.git
 ```
 
-更新两个仓库的当前分支：
+将两个仓库切换到 `main`，并更新到最新源码：
 
 ```bash
 # 更新传输层源码
-git -C linkerbot-transport pull --ff-only
+git -C linkerbot-transport switch main
+git -C linkerbot-transport pull --ff-only origin main
 # 更新设备 SDK 源码
-git -C linkerbot-hand-python-sdk pull --ff-only
+git -C linkerbot-hand-python-sdk switch main
+git -C linkerbot-hand-python-sdk pull --ff-only origin main
 ```
 
 如果 Git 提示本地修改或分支分歧，请先处理相关问题，再继续更新。

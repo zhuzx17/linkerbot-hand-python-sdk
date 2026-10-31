@@ -13,8 +13,8 @@
 mkdir -p linkerbot_sdk
 cd linkerbot_sdk
 # 获取两个源码仓库
-git clone https://github.com/linker-bot/linkerbot-transport.git
-git clone https://github.com/linker-bot/linkerbot-hand-python-sdk.git
+git clone --branch main https://github.com/linker-bot/linkerbot-transport.git
+git clone --branch main https://github.com/linker-bot/linkerbot-hand-python-sdk.git
 ```
 
 ### Windows PowerShell
@@ -24,8 +24,8 @@ git clone https://github.com/linker-bot/linkerbot-hand-python-sdk.git
 New-Item -ItemType Directory -Path linkerbot_sdk -Force
 cd linkerbot_sdk
 # 获取两个源码仓库
-git clone https://github.com/linker-bot/linkerbot-transport.git
-git clone https://github.com/linker-bot/linkerbot-hand-python-sdk.git
+git clone --branch main https://github.com/linker-bot/linkerbot-transport.git
+git clone --branch main https://github.com/linker-bot/linkerbot-hand-python-sdk.git
 ```
 
 ## 2.安装

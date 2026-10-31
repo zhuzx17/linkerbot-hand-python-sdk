@@ -9,13 +9,15 @@ git -C linkerbot-transport remote set-url origin https://github.com/linker-bot/l
 git -C linkerbot-hand-python-sdk remote set-url origin https://github.com/linker-bot/linkerbot-hand-python-sdk.git
 ```
 
-Update the current branch of both repositories:
+Switch both repositories to `main` and update them to the latest source:
 
 ```bash
 # Update the transport source
-git -C linkerbot-transport pull --ff-only
+git -C linkerbot-transport switch main
+git -C linkerbot-transport pull --ff-only origin main
 # Update the hand SDK source
-git -C linkerbot-hand-python-sdk pull --ff-only
+git -C linkerbot-hand-python-sdk switch main
+git -C linkerbot-hand-python-sdk pull --ff-only origin main
 ```
 
 If Git reports local changes or diverging branches, resolve those issues before continuing.

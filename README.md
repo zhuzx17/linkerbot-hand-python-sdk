@@ -14,8 +14,8 @@ Skip this step if you already have local source repositories.
 mkdir -p linkerbot_sdk
 cd linkerbot_sdk
 # Clone both repositories
-git clone https://github.com/linker-bot/linkerbot-transport.git
-git clone https://github.com/linker-bot/linkerbot-hand-python-sdk.git
+git clone --branch main https://github.com/linker-bot/linkerbot-transport.git
+git clone --branch main https://github.com/linker-bot/linkerbot-hand-python-sdk.git
 ```
 
 ### Windows PowerShell
@@ -25,8 +25,8 @@ git clone https://github.com/linker-bot/linkerbot-hand-python-sdk.git
 New-Item -ItemType Directory -Path linkerbot_sdk -Force
 cd linkerbot_sdk
 # Clone both repositories
-git clone https://github.com/linker-bot/linkerbot-transport.git
-git clone https://github.com/linker-bot/linkerbot-hand-python-sdk.git
+git clone --branch main https://github.com/linker-bot/linkerbot-transport.git
+git clone --branch main https://github.com/linker-bot/linkerbot-hand-python-sdk.git
 ```
 
 ## 2. Install
